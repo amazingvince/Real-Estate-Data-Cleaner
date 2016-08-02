@@ -7,52 +7,45 @@ Todo:
 
 import pandas as pd
 import numpy as np
+import argparse
 
-# aea: argparse here
-input_file = 'Real Estate Model - Candler Park.csv'
-output_file = 'cleaned_data_cp5.csv'
+features = {'Exterior' : ['Porch','Patio','Deck','Fenced','Out-Building'],
+            'BasementDesc' : ['Crawl Space','Slab', 'Basement'],
+            'ParkingDesc' : ['Driveway','Carport', '1 Car Garage', '2 Car Garage', '3 Car Garage'],
+            'Stories' : ['1 Story', '2 Story', 'More'] }
 
+address_pieces = ['StreetNumber', 'StreetName', 'City', 'CountyOrParish',
+                    'StateOrProvince', 'PostalCode']
 
-# aea: better as a map features = { 'Exterior' : [...], 'BasementDesc' : [...], ... }
-# aea: this solves capitalization as well (mention PEP8)
-# lists of keywords to make dummy vars of if they are present in an observation's description
-Exterior_features = ['Porch','Patio','Deck','Fenced','Out-Building']
-BasementDesc_features = ['Crawl Space','Slab', 'Basement']
-ParkingDesc_features = ['Driveway','Carport', '1 Car Garage', '2 Car Garage', '3 Car Garage']
-Stories_features = ['1 Story', '2 Story', 'More']
-
-def make_YearBuilt_bins(df, size):
+def make_YearBuilt_bins(data_frame, size):
     """Divides YearBuilt into bins and creates new column named YearBuiltBins
 
     Args:
-        df (pandas DataFrame): The DataFrame to make bins on
+        data_frame (pandas DataFrame): The DataFrame to make bins on
         size (int): The size of each bin
 
     Returns:
         pandas DataFrame: with an additional column named YearBuiltBins
     """
+    oldest_house = data_frame['YearBuilt'].min()
+    newest_house = data_frame['YearBuilt'].max()
+    # I meant to do this the first time list comp SO much cleaner
+    bins = [year for year in range(oldest_house, newest_house+size, size)] 
+    data_frame['YearBuiltBins'] = pd.cut(data_frame['YearBuilt'], bins)
 
-    bin_cutoffs = df['YearBuilt'].min()
-    bins = []
-    while bin_cutoffs < df['YearBuilt'].max()+size:
-        bins.append(bin_cutoffs)
-        bin_cutoffs += size
-    df['YearBuiltBins'] = pd.cut(df['YearBuilt'], bins)
-    return df
 
-def concatenate_address(df):
+def concatenate_address(data_frame, address_pieces):
     """Takes all pieces of address and concatenates them into a unique key column named Address
 
     Args:
-        df (pandas DataFrame): The DataFrame to concatenate address on
+        data_frame (pandas DataFrame): The DataFrame to concatenate address on
 
     Returns:
         pandas DataFrame: with an additional column named Address
     """
 
-    df['Address'] = df[['StreetNumber', 'StreetName', 'City', 'CountyOrParish',
-                    'StateOrProvince', 'PostalCode']].apply(lambda x: ' '.join(x.map(str)), axis=1)
-    return df
+    data_frame['Address'] = data_frame[address_pieces].apply(lambda x: ' '.join(x.map(str)), axis=1)
+    data_frame.drop(address_pieces, axis=1, inplace=True)
 
 def Basement_cleanup(x):
     # Recodes BasementDesc into three categories mapped onto a DataFrame
@@ -76,25 +69,25 @@ def Stories_cleanup(x):
     else:
         return '2 Story'
 
-def extract_dummies(df, features, col):
-    """Takes a list and makes a column for each phrase in that list
+def extract_dummies(data_frame,features):
+    """
+    Takes a dictionary of columns to features and maps over those columns and makes a column for each phrase in that list
     it places a 1 in that column if that phrase is present in the description else it places a 0
 
     Args:
-        df (pandas DataFrame): The DataFrame containing the descriptions
-        features (list): The list of phrases that are being looked for in descriptions
-        col (str): name of column which contains the descriptions
+        data_frame (pandas DataFrame): The DataFrame containing the descriptions
+        features (dic): Key = Column name value = list of phrases that are being looked for in descriptions
 
     Returns:
-        pandas DataFrame: without the column which contains descriptions plus
-        additional columns one for each word in features
-
+        None
     """
 
-    for feature in features:
-        df[feature] = np.where((df[col].str.contains(feature)),1,0)
-    df.drop([col], axis=1, inplace=True)
-    return df
+    def extract_col(col):
+        for feature in features[col]:
+            data_frame[feature] = np.where((data_frame[col].str.contains(feature)),1,0)
+        data_frame.drop([col], axis=1, inplace=True)
+    
+    map(extract_col,features)
 
 def add_upper_and_main(data_frame, desired):
     """
@@ -114,54 +107,37 @@ def add_upper_and_main(data_frame, desired):
 
     data_frame.drop([upper, main], axis=1, inplace=True)
 
-def main(df):
-    # method does too much - change to be testable (see example)
+def main(data_frame):
 
-    # df is an unclear name.  I'm not familiar with pandas, and it took me awhile to figure out
-    # that it's a data frame
-
-    df.drop(df[df.SqFtTotal == 0].index, inplace=True)
-    df['CloseDate'] = pd.to_datetime(df['CloseDate'])
-    df = concatenate_address(df)
-
-    # next section gets better with map
-    df = extract_dummies(df, Exterior_features, col='Exterior')
-    df['BasementDesc'] = df['BasementDesc'].apply(Basement_cleanup)
-    df = extract_dummies(df, BasementDesc_features, col='BasementDesc')
-    df = extract_dummies(df, ParkingDesc_features, col='ParkingDesc')
-    df['Stories'] = df['Stories'].apply(Stories_cleanup)
-    df = extract_dummies(df, Stories_features, col='Stories')
+    data_frame.drop(data_frame[data_frame.SqFtTotal == 0].index, inplace=True)
+    data_frame['CloseDate'] = pd.to_datetime(data_frame['CloseDate'])
+    concatenate_address(data_frame, address_pieces)
+    
+    data_frame['BasementDesc'] = data_frame['BasementDesc'].apply(Basement_cleanup)
+    data_frame['Stories'] = data_frame['Stories'].apply(Stories_cleanup)
+    extract_dummies(data_frame,features)
 
     # some whitespace will help in this method :)
-    df = make_YearBuilt_bins(df, size=10)
-    df['Year'] = pd.DatetimeIndex(df['CloseDate']).year
-    df['Age'] = df['Year'] - df['YearBuilt']
-    df['AssociationFee'] = np.where((df['AssociationFee']> 0),1,0)
-    df['PoolonProperty'] = np.where((df['PoolonProperty'] !=  'None'),1,0)
+    make_YearBuilt_bins(data_frame, size=10)
+    data_frame['Year'] = pd.DatetimeIndex(data_frame['CloseDate']).year
+    data_frame['Age'] = data_frame['Year'] - data_frame['YearBuilt']
+    data_frame['AssociationFee'] = np.where((data_frame['AssociationFee']> 0),1,0)
+    data_frame['PoolonProperty'] = np.where((data_frame['PoolonProperty'] !=  'None'),1,0)
 
-    # whenever you see repeated operations, consider if this can be done in a function.
-    # if you read "add_upper_and_main" you'll see that it also does the drop function
-    # df['Bedrooms'] = df['UpperBedrooms'] + df['MainBedrooms']
-    # df['FullBaths'] = df['UpperFullBaths'] + df['MainFullBaths']
-    # df['HalfBaths'] = df['UpperHalfBaths'] + df['MainHalfBaths']
+
     for domain in ['Bedrooms', 'FullBaths', 'HalfBaths']:
-        add_upper_and_main(df, domain)
+        add_upper_and_main(data_frame, domain)
+    
 
-    # we do this stuff with StreetNumber, etc up in the address concatenation. Then here
-    # we remove the no longer needed info.  This means we're operating on the data in two
-    # different locations.  This makes it hard to see, at a glance, why we are doing things here
-    # or there.  I moved the drop operation for the bedrooms and baths inside of add_upper_and_main
-    # so that we can see all of the operations in one location.  Future us will thank ourselves!
-    df.drop(['StreetNumber', 'StreetName', 'City', 'CountyOrParish', 'StateOrProvince',
-             'PostalCode'], axis=1, inplace=True)
-
-    # df.drop(['StreetNumber', 'StreetName', 'City', 'CountyOrParish', 'StateOrProvince',
-    #          'PostalCode','UpperBedrooms', 'MainBedrooms', 'UpperFullBaths', 'MainFullBaths',
-    #          'UpperHalfBaths', 'MainHalfBaths'], axis=1, inplace=True)
-    return df
 
 if __name__ == '__main__':
+    parser = argparse.ArgumentParser()
+    parser.add_argument("input_file", help="the path to the csv file to clean",
+                    type=str)
+    args = parser.parse_args()
+    input_file = args.input_file  #'Candler Park.csv'
+    output_file = 'Cleaned_'+input_file
     data_frame = pd.read_csv(input_file)
-    data_frame = main(data_frame)
+    main(data_frame)
     data_frame.to_csv(output_file)
 
